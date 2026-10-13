@@ -1,0 +1,152 @@
+openapi: 3.0.3
+info:
+  title: litellm-lite
+  version: 0.1.0
+  description: >
+    LLM gateway. Data plane (port 8080) is called by vendor apps with a virtual key.
+    Control plane (port 8081) is unauthenticated on localhost in the MVP and takes the
+    vendor from X-Vendor-Id; platform-admin writes take X-Platform-Admin: true.
+servers:
+  - url: http://localhost:8080
+    description: gateway (data plane)
+  - url: http://localhost:8081
+    description: control plane
+components:
+  securitySchemes:
+    virtualKey: {type: http, scheme: bearer, description: "sk-ll-... virtual key (x-api-key also accepted)"}
+  parameters:
+    id: {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+    vendor: {name: X-Vendor-Id, in: header, schema: {type: string, format: uuid}}
+    ifMatch: {name: If-Match, in: header, schema: {type: integer}, description: entity version; 409 on mismatch}
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: {type: object, properties: {type: {type: string, enum: [budget_exceeded, rate_limited, context_too_large, no_healthy_deployment, invalid_key, key_revoked, invalid_request_error, upstream_error, server_error]}, code: {type: string}, message: {type: string}}}
+    ChatRequest:
+      type: object
+      required: [messages]
+      properties:
+        model: {type: string, description: deployment slug, model slug, or omitted for the key's primary}
+        messages: {type: array, items: {type: object}}
+        max_tokens: {type: integer}
+        stream: {type: boolean}
+        tools: {type: array, items: {type: object}}
+    Usage:
+      type: object
+      properties: {prompt_tokens: {type: integer}, completion_tokens: {type: integer}, total_tokens: {type: integer}}
+paths:
+  /v1/chat/completions:
+    post:
+      tags: [gateway]
+      summary: OpenAI-compatible chat completion (streaming and non-streaming)
+      security: [{virtualKey: []}]
+      parameters:
+        - {name: X-Response-Format, in: header, schema: {type: string, enum: [openai]}}
+        - {name: X-Fallback, in: header, schema: {type: string, enum: [off]}}
+      requestBody: {content: {application/json: {schema: {$ref: '#/components/schemas/ChatRequest'}}}}
+      responses:
+        '200':
+          description: completion; headers X-Request-Id, X-Served-Deployment, X-Fallback-Used, X-Cost-Nano-Usd, X-Budget-Remaining-Nano-Usd
+        '400': {description: invalid request or context_too_large, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '401': {description: invalid_key or key_revoked}
+        '429': {description: budget_exceeded or rate_limited (Retry-After set for rate limits)}
+        '503': {description: no_healthy_deployment, overloaded, or strict budget unenforceable}
+  /v1/embeddings:
+    post: {tags: [gateway], summary: OpenAI-compatible embeddings, security: [{virtualKey: []}], responses: {'200': {description: embeddings list with usage}}}
+  /v1/models:
+    get: {tags: [gateway], summary: Deployments the key may use with context, effort and prices, security: [{virtualKey: []}], responses: {'200': {description: list}}}
+  /v1/gateway/estimate:
+    post: {tags: [gateway], summary: Estimated tokens, cost, serving deployment and budget allowance without calling a provider, security: [{virtualKey: []}], requestBody: {content: {application/json: {schema: {$ref: '#/components/schemas/ChatRequest'}}}}, responses: {'200': {description: estimate}}}
+  /v1/gateway/key:
+    get: {tags: [gateway], summary: Calling key's name, project, deployments, limits and remaining budget per scope, security: [{virtualKey: []}], responses: {'200': {description: key info}}}
+  /healthz: {get: {tags: [ops], summary: process alive, responses: {'200': {description: ok}}}}
+  /readyz: {get: {tags: [ops], summary: config loaded, responses: {'200': {description: ok}, '503': {description: not ready}}}}
+  /metrics: {get: {tags: [ops], summary: Prometheus exposition, responses: {'200': {description: text}}}}
+  /v1/vendors:
+    get: {tags: [catalog], summary: list vendors (platform admin), responses: {'200': {description: list}}}
+    post: {tags: [catalog], summary: create vendor, responses: {'201': {description: created}}}
+  /v1/vendors/{id}:
+    parameters: [{$ref: '#/components/parameters/id'}]
+    get: {tags: [catalog], summary: get vendor, responses: {'200': {description: vendor}}}
+    patch: {tags: [catalog], summary: update vendor, parameters: [{$ref: '#/components/parameters/ifMatch'}], responses: {'200': {description: updated}, '409': {description: version conflict}}}
+  /v1/providers:
+    get: {tags: [catalog], summary: list providers, responses: {'200': {description: list}}}
+    post: {tags: [catalog], summary: create provider (dialect openai_chat | anthropic_messages | gemini_generate | mock), responses: {'201': {description: created}}}
+  /v1/providers/{id}:
+    parameters: [{$ref: '#/components/parameters/id'}]
+    get: {tags: [catalog], summary: get provider, responses: {'200': {description: provider}}}
+    patch: {tags: [catalog], summary: update provider, parameters: [{$ref: '#/components/parameters/ifMatch'}], responses: {'200': {description: updated}}}
+    delete: {tags: [catalog], summary: soft delete; refused while deployments reference it, responses: {'204': {description: deleted}}}
+  /v1/providers/{id}/credentials:
+    parameters: [{$ref: '#/components/parameters/id'}]
+    get: {tags: [catalog], summary: credential metadata (never plaintext), responses: {'200': {description: list}}}
+    post: {tags: [catalog], summary: add a new credential version (AES-256-GCM at rest), responses: {'201': {description: created}}}
+  /v1/providers/{id}/credentials/{cid}/revoke:
+    post: {tags: [catalog], summary: revoke a credential version, parameters: [{$ref: '#/components/parameters/id'}, {name: cid, in: path, required: true, schema: {type: string}}], responses: {'200': {description: revoked}}}
+  /v1/models:
+    get: {tags: [catalog], summary: list models (control plane), responses: {'200': {description: list}}}
+    post: {tags: [catalog], summary: create model, responses: {'201': {description: created}}}
+  /v1/models/{id}:
+    parameters: [{$ref: '#/components/parameters/id'}]
+    get: {tags: [catalog], summary: get model, responses: {'200': {description: model}}}
+    patch: {tags: [catalog], summary: update model, responses: {'200': {description: updated}}}
+  /v1/deployments:
+    get: {tags: [catalog], summary: list deployments (?model_id&provider_id&status), responses: {'200': {description: list}}}
+    post: {tags: [catalog], summary: create deployment, responses: {'201': {description: created}}}
+  /v1/deployments/{id}:
+    parameters: [{$ref: '#/components/parameters/id'}]
+    get: {tags: [catalog], summary: get deployment, responses: {'200': {description: deployment}}}
+    patch: {tags: [catalog], summary: update deployment, responses: {'200': {description: updated}}}
+    delete: {tags: [catalog], summary: soft delete; refused while keys use it as primary, responses: {'204': {description: deleted}}}
+  /v1/deployments/{id}/prices:
+    parameters: [{$ref: '#/components/parameters/id'}]
+    get: {tags: [catalog], summary: price history, responses: {'200': {description: list}}}
+    post: {tags: [catalog], summary: new price row with effective_from and nano-USD per-token tiers, responses: {'201': {description: created}}}
+  /v1/deployments/{id}/health:
+    get: {tags: [catalog], summary: breaker state, error rate, p50/p99 (last 15 minutes), parameters: [{$ref: '#/components/parameters/id'}], responses: {'200': {description: health}}}
+  /v1/projects:
+    get: {tags: [vendor], summary: list projects, parameters: [{$ref: '#/components/parameters/vendor'}], responses: {'200': {description: list}}}
+    post: {tags: [vendor], summary: create project, responses: {'201': {description: created}}}
+  /v1/projects/{id}:
+    parameters: [{$ref: '#/components/parameters/id'}]
+    get: {tags: [vendor], summary: get project, responses: {'200': {description: project}}}
+    patch: {tags: [vendor], summary: update project, responses: {'200': {description: updated}}}
+    delete: {tags: [vendor], summary: soft delete; revokes its keys, responses: {'204': {description: deleted}}}
+  /v1/keys:
+    get: {tags: [vendor], summary: list keys (?project_id&status), responses: {'200': {description: list}}}
+    post: {tags: [vendor], summary: create key with budgets; plaintext returned once, responses: {'201': {description: created}}}
+  /v1/keys/{id}:
+    parameters: [{$ref: '#/components/parameters/id'}]
+    get: {tags: [vendor], summary: get key, responses: {'200': {description: key}}}
+    patch: {tags: [vendor], summary: update name, primary, fallback_policy, response_format, limits, responses: {'200': {description: updated}}}
+  /v1/keys/{id}/rotate: {post: {tags: [vendor], summary: new secret, parameters: [{$ref: '#/components/parameters/id'}], responses: {'200': {description: new plaintext}}}}
+  /v1/keys/{id}/revoke: {post: {tags: [vendor], summary: revoke key, parameters: [{$ref: '#/components/parameters/id'}], responses: {'200': {description: revoked}}}}
+  /v1/keys/{id}/usage: {get: {tags: [vendor], summary: usage and cost history (?from&to&granularity), parameters: [{$ref: '#/components/parameters/id'}], responses: {'200': {description: rows}}}}
+  /v1/budgets:
+    get: {tags: [vendor], summary: list budgets (?scope_type&scope_id), responses: {'200': {description: list}}}
+    post: {tags: [vendor], summary: create budget (scope key|project|vendor, kind monthly|lifetime, on_exceed block|alert, enforcement available|strict), responses: {'201': {description: created}}}
+  /v1/budgets/{id}:
+    parameters: [{$ref: '#/components/parameters/id'}]
+    get: {tags: [vendor], summary: get budget, responses: {'200': {description: budget}}}
+    patch: {tags: [vendor], summary: update budget, responses: {'200': {description: updated}}}
+    delete: {tags: [vendor], summary: delete budget, responses: {'204': {description: deleted}}}
+  /v1/budgets/{id}/periods: {get: {tags: [vendor], summary: spent per period with exceeded_at, parameters: [{$ref: '#/components/parameters/id'}], responses: {'200': {description: list}}}}
+  /v1/budgets/{id}/remaining: {get: {tags: [vendor], summary: live remaining from Redis, parameters: [{$ref: '#/components/parameters/id'}], responses: {'200': {description: remaining}}}}
+  /v1/webhooks:
+    get: {tags: [webhooks], summary: list endpoints, responses: {'200': {description: list}}}
+    post: {tags: [webhooks], summary: create endpoint (url, events), responses: {'201': {description: created}}}
+  /v1/webhooks/{id}:
+    parameters: [{$ref: '#/components/parameters/id'}]
+    get: {tags: [webhooks], summary: get endpoint, responses: {'200': {description: endpoint}}}
+    patch: {tags: [webhooks], summary: update endpoint, responses: {'200': {description: updated}}}
+    delete: {tags: [webhooks], summary: delete endpoint, responses: {'204': {description: deleted}}}
+  /v1/webhooks/{id}/test: {post: {tags: [webhooks], summary: send a signed ping (X-Signature t=,v1=), parameters: [{$ref: '#/components/parameters/id'}], responses: {'200': {description: delivery result}}}}
+  /v1/webhooks/{id}/deliveries: {get: {tags: [webhooks], summary: deliveries (?status), parameters: [{$ref: '#/components/parameters/id'}], responses: {'200': {description: list}}}}
+  /v1/webhook-deliveries/{id}/replay: {post: {tags: [webhooks], summary: replay a delivery, parameters: [{$ref: '#/components/parameters/id'}], responses: {'200': {description: queued}}}}
+  /v1/analytics/usage: {get: {tags: [analytics], summary: usage by key|project|deployment|provider, hour|day, responses: {'200': {description: rows}}}}
+  /v1/analytics/requests: {get: {tags: [analytics], summary: request log (?key_id&project_id&status&error_class&from&to), responses: {'200': {description: rows}}}}
+  /v1/analytics/requests/{rid}: {get: {tags: [analytics], summary: every attempt for one request, parameters: [{name: rid, in: path, required: true, schema: {type: string}}], responses: {'200': {description: attempts}}}}
+  /v1/analytics/budgets/remaining: {get: {tags: [analytics], summary: remaining per scope (?scope_type&scope_id), responses: {'200': {description: rows}}}}
+  /v1/analytics/fallbacks: {get: {tags: [analytics], summary: fallback rate by deployment and reason, responses: {'200': {description: rows}}}}
+  /v1/audit: {get: {tags: [analytics], summary: audit log (?entity_type&entity_id&actor_id&from&to), responses: {'200': {description: rows}}}}

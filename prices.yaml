@@ -1,0 +1,125 @@
+# Seed catalog. Prices are USD per 1M tokens (converted to nano-USD per token at seed time).
+# Values are from public provider pricing pages as of 2025; verified=false until checked against an invoice.
+models:
+  - slug: gpt-4o
+    family: gpt-4o
+    tokenizer: o200k_base
+    capabilities: [streaming, tools, vision, json]
+  - slug: gpt-4o-mini
+    family: gpt-4o
+    tokenizer: o200k_base
+    capabilities: [streaming, tools, vision, json]
+  - slug: claude-sonnet-4-5
+    family: claude
+    tokenizer: o200k_base
+    tokenizer_multiplier: 1.15
+    capabilities: [streaming, tools, vision]
+    supported_efforts: [none, low, medium, high]
+  - slug: gemini-2.5-pro
+    family: gemini
+    tokenizer: o200k_base
+    tokenizer_multiplier: 1.1
+    capabilities: [streaming, tools, vision, json]
+    supported_efforts: [none, low, medium, high]
+  - slug: gemini-2.5-flash
+    family: gemini
+    tokenizer: o200k_base
+    tokenizer_multiplier: 1.1
+    capabilities: [streaming, tools, vision, json]
+  - slug: kimi-k2
+    family: kimi
+    tokenizer: o200k_base
+    tokenizer_multiplier: 1.2
+    capabilities: [streaming, tools]
+  - slug: text-embedding-3-small
+    family: embedding
+    tokenizer: cl100k_base
+    capabilities: [embeddings]
+  - slug: mock-small
+    family: mock
+    capabilities: [streaming, tools, json]
+  - slug: mock-large
+    family: mock
+    capabilities: [streaming, tools, json]
+
+providers:
+  - slug: mock
+    dialect: mock
+  - slug: mock-b
+    dialect: mock
+  - slug: openai
+    dialect: openai_chat
+    base_url: https://api.openai.com/v1
+    env_key: OPENAI_API_KEY
+  - slug: anthropic
+    dialect: anthropic_messages
+    base_url: https://api.anthropic.com
+    env_key: ANTHROPIC_API_KEY
+  - slug: google
+    dialect: gemini_generate
+    base_url: https://generativelanguage.googleapis.com
+    env_key: GEMINI_API_KEY
+  - slug: moonshot
+    dialect: openai_chat
+    base_url: https://api.moonshot.ai/v1
+    env_key: MOONSHOT_API_KEY
+
+deployments:
+  - model: mock-small
+    provider: mock
+    context_window: 8000
+    max_output_tokens: 1024
+    price: { input: 1.00, cached_input: 0.50, output: 4.00 }
+  - model: mock-small
+    provider: mock-b
+    context_window: 8000
+    max_output_tokens: 1024
+    priority: 110
+    price: { input: 0.80, cached_input: 0.40, output: 3.20 }
+  - model: mock-large
+    provider: mock
+    context_window: 128000
+    max_output_tokens: 4096
+    price: { input: 2.50, cached_input: 1.25, output: 10.00 }
+  - model: gpt-4o
+    provider: openai
+    context_window: 128000
+    max_output_tokens: 16384
+    price: { input: 2.50, cached_input: 1.25, output: 10.00 }
+  - model: gpt-4o-mini
+    provider: openai
+    context_window: 128000
+    max_output_tokens: 16384
+    price: { input: 0.15, cached_input: 0.075, output: 0.60 }
+  - model: text-embedding-3-small
+    provider: openai
+    context_window: 8191
+    max_output_tokens: 0
+    price: { input: 0.02, output: 0 }
+  - model: claude-sonnet-4-5
+    provider: anthropic
+    context_window: 200000
+    max_output_tokens: 8192
+    effort: medium
+    price: { input: 3.00, cached_input: 0.30, cache_write_5m: 3.75, cache_write_1h: 6.00, output: 15.00 }
+  - model: gemini-2.5-pro
+    provider: google
+    provider_model_name: gemini-2.5-pro
+    context_window: 1048576
+    max_output_tokens: 65536
+    effort: medium
+    tiers:
+      - { up_to_prompt_tokens: 200000, input: 1.25, cached_input: 0.31, output: 10.00 }
+      - { input: 2.50, cached_input: 0.625, output: 15.00 }
+  - model: gemini-2.5-flash
+    provider: google
+    provider_model_name: gemini-2.5-flash
+    context_window: 1048576
+    max_output_tokens: 65536
+    price: { input: 0.30, cached_input: 0.075, output: 2.50 }
+  - model: kimi-k2
+    provider: moonshot
+    provider_model_name: kimi-k2-0905-preview
+    context_window: 256000
+    max_output_tokens: 16384
+    price: { input: 0.60, cached_input: 0.15, output: 2.50 }
